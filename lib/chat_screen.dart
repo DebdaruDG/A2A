@@ -2,6 +2,7 @@ import 'dart:developer';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'chat_provider.dart';
+import 'voice_note.dart';
 
 class ChatScreen extends StatelessWidget {
   final TextEditingController _textController = TextEditingController();
@@ -90,40 +91,6 @@ class ChatScreen extends StatelessWidget {
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: Container(
-                              margin: EdgeInsets.symmetric(
-                                vertical: 5,
-                                horizontal: 10,
-                              ),
-                              padding: EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: Colors.black,
-                                borderRadius: BorderRadius.circular(15),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.grey.withOpacity(0.2),
-                                    spreadRadius: 1,
-                                    blurRadius: 5,
-                                    offset: Offset(0, 3),
-                                  ),
-                                ],
-                              ),
-                              child: Text(
-                                state.messages.isNotEmpty &&
-                                        state.messages.last.startsWith(
-                                          'Assistant:',
-                                        )
-                                    ? state.messages.last.replaceAll(
-                                      'Assistant: ',
-                                      '',
-                                    )
-                                    : 'Assistant: No text response',
-                                style: TextStyle(color: Colors.white),
-                              ),
-                            ),
-                          ),
                           Container(
                             margin: EdgeInsets.symmetric(
                               vertical: 5,
@@ -158,51 +125,52 @@ class ChatScreen extends StatelessWidget {
                                         duration.inMilliseconds > 0
                                             ? duration.inMilliseconds.toDouble()
                                             : 1.0; // Default to 1 to avoid division by zero
-
-                                    return Row(
-                                      children: [
-                                        IconButton(
-                                          icon: Icon(
-                                            state.isPlaying
-                                                ? Icons.pause
-                                                : Icons.play_arrow,
-                                            color: Colors.white,
-                                          ),
-                                          onPressed: () {
-                                            if (state.isPlaying) {
-                                              state.audioPlayer.pause();
-                                            } else {
-                                              // state._playResponse();
-                                            }
-                                          },
-                                        ),
-                                        Expanded(
-                                          child: Slider(
-                                            value: position.inMilliseconds
-                                                .toDouble()
-                                                .clamp(
-                                                  0.0,
-                                                  maxDuration,
-                                                ), // Clamp value
-                                            max: maxDuration,
-                                            onChanged: (value) {
-                                              state.audioPlayer.seek(
-                                                Duration(
-                                                  milliseconds: value.toInt(),
-                                                ),
-                                              );
-                                            },
-                                            activeColor: Colors.white,
-                                            inactiveColor: Colors.grey[400],
-                                          ),
-                                        ),
-                                        Text(
-                                          '${position.inMinutes}:${(position.inSeconds % 60).toString().padLeft(2, '0')} / '
-                                          '${duration.inMinutes}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}',
-                                          style: TextStyle(color: Colors.white),
-                                        ),
-                                      ],
+                                    log(
+                                      'state.isPlaying :- ${state.isPlaying}',
                                     );
+                                    return VoiceNoteWidget(
+                                      audioBytes: state.audioData,
+                                    );
+
+                                    // Row(
+                                    //   children: [
+                                    //     IconButton(
+                                    //       icon: Icon(
+                                    //         state.isPlaying
+                                    //             ? Icons.pause
+                                    //             : Icons.play_arrow,
+                                    //         color: Colors.white,
+                                    //       ),
+                                    //       onPressed: () {
+                                    //         if (state.isPlaying) {
+                                    //           state.audioPlayer.pause();
+                                    //         } else {
+                                    //           state.audioPlayer.resume();
+                                    //         }
+                                    //       },
+                                    //     ),
+                                    //     Slider(
+                                    //       value: position.inMilliseconds
+                                    //           .toDouble()
+                                    //           .clamp(0.0, maxDuration),
+                                    //       max: maxDuration,
+                                    //       onChanged: (value) {
+                                    //         state.audioPlayer.seek(
+                                    //           Duration(
+                                    //             milliseconds: value.toInt(),
+                                    //           ),
+                                    //         );
+                                    //       },
+                                    //       activeColor: Colors.white,
+                                    //       inactiveColor: Colors.grey[400],
+                                    //     ),
+                                    //     Text(
+                                    //       '${position.inMinutes}:${(position.inSeconds % 60).toString().padLeft(2, '0')} / '
+                                    //       '${duration.inMinutes}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}',
+                                    //       style: TextStyle(color: Colors.white),
+                                    //     ),
+                                    //   ],
+                                    // );
                                   },
                                 );
                               },

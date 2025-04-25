@@ -17,6 +17,8 @@ class ChatState with ChangeNotifier {
   final AudioPlayer _audioPlayer = AudioPlayer();
   WebSocketChannel? _channel;
   final StringBuffer _audioBuffer = StringBuffer();
+  Duration? _duration;
+  Uint8List _audioData = Uint8List(0);
 
   AudioPlayer get audioPlayer => _audioPlayer;
   String get responseAudio => _responseAudio;
@@ -24,6 +26,18 @@ class ChatState with ChangeNotifier {
   bool get isPlaying => _isPlaying;
   bool get isLoading => _isLoading;
   List<String> get messages => _messages;
+  Duration? get duration => _duration;
+  Uint8List get audioData => _audioData;
+
+  void get togglePlayPause {
+    if (_isPlaying) {
+      audioPlayer.pause();
+    } else {
+      audioPlayer.resume();
+    }
+    _isPlaying = !_isPlaying;
+    notifyListeners();
+  }
 
   ChatState() {
     audioRecorder = record.AudioRecorder();
@@ -179,9 +193,11 @@ class ChatState with ChangeNotifier {
     try {
       List<int> decodedBytes = base64Decode(_responseAudio);
       log('Decoded bytes length: ${decodedBytes.length}');
+      _audioData = Uint8List.fromList(decodedBytes);
 
-      Uint8List audioData = Uint8List.fromList(decodedBytes);
-      await _audioPlayer.play(BytesSource(audioData));
+      // Set the audio source and play
+      await _audioPlayer.setSource(BytesSource(_audioData));
+      await _audioPlayer.resume();
       log('Audio playback completed successfully');
     } catch (e) {
       log('Error in _playResponse: $e');
