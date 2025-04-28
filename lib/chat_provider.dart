@@ -19,6 +19,7 @@ class ChatState with ChangeNotifier {
   WebSocketChannel? _channel;
   final AudioPlayer _sharedPlayer = AudioPlayer();
   final StringBuffer _audioBuffer = StringBuffer();
+  Timer? _keepAliveTimer;
 
   List<ChatMessage> _chats = [];
   List<ChatMessage> get chats => _chats;
@@ -48,36 +49,80 @@ class ChatState with ChangeNotifier {
   }
 
   void connectWebSocket() {
+    _channel?.sink.close();
+    _keepAliveTimer?.cancel();
     _channel = WebSocketChannel.connect(
       Uri.parse(
         'wss://pu6niet7nl.execute-api.ap-south-1.amazonaws.com/production/',
       ),
     );
-  }
+    developer.log('WebSocket connected');
 
-  Future<void> sendText(String text) async {
-    _chats.add(ChatMessage(text: text, isUser: true));
-    _chats.add(ChatMessage(isUser: false, isLoading: true));
-    _isLoading = true;
-    notifyListeners();
-
-    final event = {
-      "action": "TextCompletionOpenaiVoice",
-      "text": text,
-      "use_assistant": false,
-    };
-    _channel?.sink.add(jsonEncode(event));
+    // Set up keep-alive ping
+    _keepAliveTimer = Timer.periodic(Duration(seconds: 30), (timer) {
+      if (_channel != null) {
+        _channel!.sink.add(jsonEncode({"action": "ping"}));
+        developer.log('Sent keep-alive ping');
+      }
+    });
 
     _channel?.stream.listen(
       (message) {
+        developer.log('Received WebSocket message: $message');
         _handleResponse(message);
       },
       onError: (error) {
-        developer.log("WebSocket Error: $error");
+        developer.log('WebSocket Error: $error');
         _isLoading = false;
         notifyListeners();
       },
+      onDone: () {
+        developer.log(
+          'WebSocket closed with code: ${_channel?.closeCode}, reason: ${_channel?.closeReason}',
+        );
+        _channel = null;
+        _keepAliveTimer?.cancel();
+        // Delay reconnection to allow server response
+        Future.delayed(Duration(seconds: 5), () {
+          if (_channel == null) {
+            connectWebSocket();
+          }
+        });
+      },
     );
+  }
+
+  Future<void> sendText(String text) async {
+    try {
+      _chats.add(ChatMessage(text: text, isUser: true));
+      _chats.add(ChatMessage(isUser: false, isLoading: true));
+      _isLoading = true;
+      notifyListeners();
+
+      final event = {
+        "action": "TextCompletionOpenaiVoice",
+        "text": text,
+        "use_assistant": false,
+      };
+      developer.log('test event - $event');
+
+      if (_channel == null) {
+        developer.log('WebSocket channel is null or closed for text event');
+        connectWebSocket();
+        await Future.delayed(Duration(milliseconds: 500));
+      }
+
+      if (_channel != null) {
+        _channel!.sink.add(jsonEncode(event));
+        developer.log('Text event sent successfully');
+      } else {
+        throw Exception('Failed to reconnect WebSocket for text event');
+      }
+    } catch (err) {
+      developer.log('sendText error: $err');
+      _isLoading = false;
+      notifyListeners();
+    }
   }
 
   Future<void> sendAudio(Uint8List audioData) async {
@@ -85,51 +130,173 @@ class ChatState with ChangeNotifier {
       _isLoading = true;
       notifyListeners();
 
-      developer.log('audioBytesInput :- ${audioData.length} bytes');
+      // Log size of audioData in bytes (to 3 decimal places)
+      final audioDataSizeBytes = audioData.length.toDouble();
+      developer.log(
+        'audioBytesInput size: ${audioDataSizeBytes.toStringAsFixed(3)} bytes',
+      );
+
+      // Add audio data to chats
       _chats.add(ChatMessage(isUser: true, audioBytes: audioData));
       notifyListeners();
 
+      // Encode to base64
       String base64Audio = base64Encode(audioData);
 
-      final event = {"action": "PunjabiChatbot", "audio": base64Audio};
-      _channel?.sink.add(jsonEncode(event));
+      // Log total size of base64Audio in kilobytes (to 3 decimal places)
+      final base64SizeBytes = base64Audio.length; // Bytes in UTF-8
+      final base64SizeKB = base64SizeBytes / 1024.0; // Convert to KB
+      developer.log(
+        'base64Audio total size: ${base64SizeKB.toStringAsFixed(3)} KB',
+      );
+
+      // Send chunks over WebSocket
+      await sendAudioChunks(base64Audio);
+
+      developer.log(
+        'All audio chunks sent successfully, awaiting server response',
+      );
     } catch (err) {
-      developer.log('audioBytesInput error :- $err');
+      developer.log('audioBytesInput error: $err');
     } finally {
       _isLoading = false;
       notifyListeners();
     }
   }
 
+  Future<void> sendAudioChunks(String base64Audio) async {
+    // Define chunk size (30 KB in bytes to stay under 32 KB limit)
+    const int chunkSizeBytes = 30 * 1024; // 30 KB
+
+    // Calculate number of chunks
+    final int base64SizeBytes = base64Audio.length;
+    final int totalChunks = (base64SizeBytes / chunkSizeBytes).ceil();
+    developer.log('Splitting into $totalChunks chunk(s) of ~30 KB each');
+
+    // Send chunks over WebSocket
+    for (int i = 0; i < totalChunks; i++) {
+      // Calculate start and end indices for the chunk
+      final int start = i * chunkSizeBytes;
+      final int end =
+          start + chunkSizeBytes < base64SizeBytes
+              ? start + chunkSizeBytes
+              : base64SizeBytes;
+
+      // Extract chunk
+      final String chunk = base64Audio.substring(start, end);
+      final chunkSizeBytesActual = chunk.length;
+      final chunkSizeKB = chunkSizeBytesActual / 1024.0;
+
+      // Log chunk details
+      developer.log(
+        'Chunk ${i + 1}/$totalChunks size: ${chunkSizeKB.toStringAsFixed(3)} KB (${chunkSizeBytesActual} bytes)',
+      );
+
+      // Prepare WebSocket event
+      final event = {
+        "action": "PunjabiChatbot",
+        "audio": chunk,
+        "chunkIndex": i,
+        "totalChunks": totalChunks,
+      };
+      final eventJson = jsonEncode(event);
+
+      // Log event size
+      final eventSizeBytes = eventJson.length;
+      developer.log(
+        'WebSocket event size (chunk ${i + 1}): ${(eventSizeBytes / 1024.0).toStringAsFixed(3)} KB ($eventSizeBytes bytes)',
+      );
+
+      // Send over WebSocket
+      if (_channel == null) {
+        developer.log('WebSocket channel is null or closed for chunk ${i + 1}');
+        connectWebSocket();
+        await Future.delayed(
+          Duration(milliseconds: 500),
+        ); // Wait for connection
+      }
+
+      if (_channel != null) {
+        _channel!.sink.add(eventJson);
+        developer.log(
+          'WebSocket chunk ${i + 1}/$totalChunks sent successfully',
+        );
+      } else {
+        throw Exception('Failed to reconnect WebSocket for chunk ${i + 1}');
+      }
+    }
+  }
+
+  // Test function to send a simple message and check for response
+  Future<void> testWebSocket() async {
+    try {
+      final testEvent = {
+        "action": "PunjabiChatbot",
+        "audio": "test",
+        // "chunkIndex": 0,
+        // "totalChunks": 1,
+      };
+      if (_channel == null) {
+        developer.log('WebSocket channel is null or closed for test event');
+        connectWebSocket();
+        await Future.delayed(Duration(milliseconds: 500));
+      }
+      if (_channel != null) {
+        _channel!.sink.add(jsonEncode(testEvent));
+        developer.log('Test event sent successfully');
+      } else {
+        throw Exception('Failed to reconnect WebSocket for test event');
+      }
+    } catch (err) {
+      developer.log('testWebSocket error: $err');
+    }
+  }
+
   void _handleResponse(dynamic message) {
     try {
+      developer.log('Received WebSocket message: $message');
+
+      // Handle acknowledgment messages
       if (message is String && message.contains("Sent WebSocket response")) {
+        developer.log('Received acknowledgment: $message');
         return;
       }
 
+      // Buffer the message
       _audioBuffer.write(message);
       final fullMessage = _audioBuffer.toString();
-      final decoded = jsonDecode(fullMessage);
+      developer.log('Current buffer: $fullMessage');
 
+      // Attempt to parse JSON
+      final decoded = jsonDecode(fullMessage);
+      developer.log('Parsed WebSocket response: $decoded');
+
+      // Process the response
       if (decoded['response'] != null || decoded['audio'] != null) {
         _chats.removeWhere((m) => m.isLoading);
         if (decoded['response'] != null) {
+          developer.log('Response text: ${decoded['response']}');
           _chats.add(ChatMessage(text: decoded['response'], isUser: false));
         }
-
         if (decoded['audio'] != null) {
+          developer.log(
+            'Response audio received, base64 length: ${decoded['audio'].length}',
+          );
           final bytes = base64Decode(decoded['audio']);
           _chats.add(
             ChatMessage(audioBytes: Uint8List.fromList(bytes), isUser: false),
           );
         }
-
         _audioBuffer.clear();
         _isLoading = false;
         notifyListeners();
       }
     } catch (e) {
-      if (e is FormatException) return;
+      if (e is FormatException) {
+        developer.log('Partial message received, buffering: $e');
+        return; // Wait for more data
+      }
+      developer.log('Error processing WebSocket response: $e');
       _audioBuffer.clear();
       _isLoading = false;
       notifyListeners();
@@ -162,8 +329,8 @@ class ChatState with ChangeNotifier {
       if (resumePosition != null) {
         await _sharedPlayer.seek(resumePosition);
       }
-      notifyListeners();
     }
+    notifyListeners();
   }
 
   Future<void> startRecording() async {
@@ -231,6 +398,7 @@ class ChatState with ChangeNotifier {
 
   @override
   void dispose() {
+    _keepAliveTimer?.cancel();
     _channel?.sink.close();
     _audioRecorder.dispose();
     _sharedPlayer.dispose();
