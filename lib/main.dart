@@ -4,8 +4,9 @@ import 'chat_provider.dart';
 import 'chat_screen.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(
-    ChangeNotifierProvider(create: (context) => ChatState(), child: MyApp()),
+    ChangeNotifierProvider(create: (_) => ChatState(), child: const MyApp()),
   );
 }
 

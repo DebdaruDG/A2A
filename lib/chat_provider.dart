@@ -1,52 +1,49 @@
+import 'dart:async';
 import 'dart:convert';
-import 'dart:developer';
-import 'dart:io';
+import 'dart:developer' as developer;
 import 'dart:typed_data';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:record/record.dart' as record;
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'chat_model.dart'; // Assuming ChatMessage is defined here
+import 'package:intl/intl.dart';
 
 class ChatState with ChangeNotifier {
-  String _responseAudio = '';
   bool _isRecording = false;
-  bool _isPlaying = false;
   bool _isLoading = false;
-  final List<String> _messages = [];
-  late final record.AudioRecorder audioRecorder;
-  final AudioPlayer _audioPlayer = AudioPlayer();
+  bool _isPlaying = false;
+  final record.AudioRecorder _audioRecorder = record.AudioRecorder();
   WebSocketChannel? _channel;
+  final AudioPlayer _sharedPlayer = AudioPlayer();
   final StringBuffer _audioBuffer = StringBuffer();
-  Duration? _duration;
-  Uint8List _audioData = Uint8List(0);
 
-  AudioPlayer get audioPlayer => _audioPlayer;
-  String get responseAudio => _responseAudio;
+  List<ChatMessage> _chats = [];
+  List<ChatMessage> get chats => _chats;
+
+  Uint8List? _currentPlayingAudio;
+  Duration? _currentPosition;
+  Map<Uint8List, Duration> _pausedPositions = {};
+
+  AudioPlayer get sharedPlayer => _sharedPlayer;
   bool get isRecording => _isRecording;
-  bool get isPlaying => _isPlaying;
   bool get isLoading => _isLoading;
-  List<String> get messages => _messages;
-  Duration? get duration => _duration;
-  Uint8List get audioData => _audioData;
-
-  void get togglePlayPause {
-    if (_isPlaying) {
-      audioPlayer.pause();
-    } else {
-      audioPlayer.resume();
-    }
-    _isPlaying = !_isPlaying;
-    notifyListeners();
-  }
+  bool get isPlaying => _isPlaying;
 
   ChatState() {
-    audioRecorder = record.AudioRecorder();
     connectWebSocket();
-    _audioPlayer.onPlayerStateChanged.listen((state) {
-      if (state == PlayerState.completed) {
-        _isPlaying = false;
-        notifyListeners();
-      }
+
+    _sharedPlayer.onPlayerComplete.listen((event) {
+      _isPlaying = false;
+      _currentPlayingAudio = null;
+      notifyListeners();
+    });
+
+    _sharedPlayer.onPositionChanged.listen((pos) {
+      _currentPosition = pos;
+      notifyListeners();
     });
   }
 
@@ -58,33 +55,9 @@ class ChatState with ChangeNotifier {
     );
   }
 
-  Future<void> startRecording() async {
-    if (await audioRecorder.hasPermission()) {
-      _isRecording = true;
-      notifyListeners();
-      await audioRecorder.start(
-        const record.RecordConfig(
-          encoder: record.AudioEncoder.pcm16bits,
-          sampleRate: 44100,
-          numChannels: 1,
-          bitRate: 128000,
-        ),
-        path: 'audio.wav',
-      );
-    }
-  }
-
-  Future<void> stopRecording() async {
-    _isRecording = false;
-    notifyListeners();
-    String? path = await audioRecorder.stop();
-    if (path != null) {
-      await sendAudio(File(path));
-      _messages.add('User: Audio sent'); // Add user message for audio
-    }
-  }
-
   Future<void> sendText(String text) async {
+    _chats.add(ChatMessage(text: text, isUser: true));
+    _chats.add(ChatMessage(isUser: false, isLoading: true));
     _isLoading = true;
     notifyListeners();
 
@@ -93,7 +66,6 @@ class ChatState with ChangeNotifier {
       "text": text,
       "use_assistant": false,
     };
-
     _channel?.sink.add(jsonEncode(event));
 
     _channel?.stream.listen(
@@ -101,117 +73,167 @@ class ChatState with ChangeNotifier {
         _handleResponse(message);
       },
       onError: (error) {
-        log('WebSocket error: $error');
+        developer.log("WebSocket Error: $error");
         _isLoading = false;
         notifyListeners();
-        _messages.add('WebSocket Error: $error');
       },
-      onDone: () {
-        log('WebSocket connection closed');
-        _isLoading = false;
-        notifyListeners();
-        _messages.add('WebSocket connection closed');
-      },
-      cancelOnError: false,
     );
   }
 
-  Future<void> sendAudio(File audioFile) async {
-    _isLoading = true;
-    notifyListeners();
+  Future<void> sendAudio(Uint8List audioData) async {
+    try {
+      _isLoading = true;
+      notifyListeners();
 
-    List<int> audioBytes = await audioFile.readAsBytes();
-    String base64Audio = base64Encode(audioBytes);
+      developer.log('audioBytesInput :- ${audioData.length} bytes');
+      _chats.add(ChatMessage(isUser: true, audioBytes: audioData));
+      notifyListeners();
 
-    final event = {
-      "action": "AudioProcessing",
-      "audio": base64Audio,
-      "use_assistant": false,
-    };
+      String base64Audio = base64Encode(audioData);
 
-    _channel?.sink.add(jsonEncode(event));
-
-    _channel?.stream.listen(
-      (message) {
-        _handleResponse(message);
-      },
-      onError: (error) {
-        _isLoading = false;
-        notifyListeners();
-        _messages.add('Error: $error');
-      },
-    );
+      final event = {"action": "PunjabiChatbot", "audio": base64Audio};
+      _channel?.sink.add(jsonEncode(event));
+    } catch (err) {
+      developer.log('audioBytesInput error :- $err');
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
   }
 
   void _handleResponse(dynamic message) {
-    log('message received: $message');
     try {
-      if (message is String &&
-          message.contains('Sent WebSocket response (chunked)')) {
+      if (message is String && message.contains("Sent WebSocket response")) {
         return;
       }
 
       _audioBuffer.write(message);
-      String fullMessage = _audioBuffer.toString();
-
+      final fullMessage = _audioBuffer.toString();
       final decoded = jsonDecode(fullMessage);
-      log('decoded JSON: $decoded');
 
-      if (decoded['audio'] != null) {
-        _responseAudio = decoded['audio'];
+      if (decoded['response'] != null || decoded['audio'] != null) {
+        _chats.removeWhere((m) => m.isLoading);
+        if (decoded['response'] != null) {
+          _chats.add(ChatMessage(text: decoded['response'], isUser: false));
+        }
+
+        if (decoded['audio'] != null) {
+          final bytes = base64Decode(decoded['audio']);
+          _chats.add(
+            ChatMessage(audioBytes: Uint8List.fromList(bytes), isUser: false),
+          );
+        }
+
         _audioBuffer.clear();
         _isLoading = false;
         notifyListeners();
-        _playResponse();
-      }
-      if (decoded['response'] != null) {
-        _messages.add('Assistant: ${decoded['response']}');
-        _audioBuffer.clear();
-        notifyListeners();
-        log('Text response added to messages: ${decoded['response']}');
       }
     } catch (e) {
-      log('Error in _handleResponse: $e');
-      if (e is FormatException) {
-        log('Partial JSON received, buffering...');
-      } else {
-        _isLoading = false;
-        notifyListeners();
-        _messages.add('Error processing response: $e');
-        _audioBuffer.clear();
-      }
+      if (e is FormatException) return;
+      _audioBuffer.clear();
+      _isLoading = false;
+      notifyListeners();
     }
   }
 
-  Future<void> _playResponse() async {
-    log(
-      'Starting to play response as stream. Audio length: ${_responseAudio.length} chars',
-    );
-    _isPlaying = true;
-    notifyListeners();
+  Future<void> togglePlayPause(Uint8List audioBytes) async {
+    if (_currentPlayingAudio != null && _currentPlayingAudio != audioBytes) {
+      await _sharedPlayer.stop();
+      _pausedPositions[_currentPlayingAudio!] =
+          _currentPosition ?? Duration.zero;
+    }
 
-    try {
-      List<int> decodedBytes = base64Decode(_responseAudio);
-      log('Decoded bytes length: ${decodedBytes.length}');
-      _audioData = Uint8List.fromList(decodedBytes);
-
-      // Set the audio source and play
-      await _audioPlayer.setSource(BytesSource(_audioData));
-      await _audioPlayer.resume();
-      log('Audio playback completed successfully');
-    } catch (e) {
-      log('Error in _playResponse: $e');
+    if (_isPlaying && _currentPlayingAudio == audioBytes) {
+      await _sharedPlayer.pause();
+      _pausedPositions[audioBytes] = _currentPosition ?? Duration.zero;
       _isPlaying = false;
+    } else {
+      if (_currentPlayingAudio != audioBytes) {
+        await _sharedPlayer.setSource(BytesSource(audioBytes));
+        await _sharedPlayer.resume();
+        _currentPlayingAudio = audioBytes;
+        _isPlaying = true;
+      } else {
+        await _sharedPlayer.resume();
+        _isPlaying = true;
+      }
+
+      final resumePosition = _pausedPositions[audioBytes];
+      if (resumePosition != null) {
+        await _sharedPlayer.seek(resumePosition);
+      }
       notifyListeners();
-      _messages.add('Failed to play audio: $e');
+    }
+  }
+
+  Future<void> startRecording() async {
+    try {
+      if (await _audioRecorder.hasPermission()) {
+        _isRecording = true;
+        notifyListeners();
+
+        if (kIsWeb) {
+          await _audioRecorder.start(
+            const record.RecordConfig(
+              encoder: record.AudioEncoder.wav,
+              sampleRate: 44100,
+              numChannels: 1,
+            ),
+            path: '', // Empty path for in-memory recording
+          );
+          developer.log('Recording started (memory mode) for Web');
+        } else {
+          developer.log('Recording not implemented for non-web platforms');
+        }
+      } else {
+        developer.log('Microphone permission denied');
+      }
+    } catch (err) {
+      developer.log('Error starting recording: $err');
+      _isRecording = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> stopRecording() async {
+    try {
+      if (_isRecording) {
+        _isRecording = false;
+        notifyListeners();
+
+        final blobUrl = await _audioRecorder.stop();
+        developer.log('Blob URL: $blobUrl');
+        if (blobUrl != null && blobUrl.isNotEmpty) {
+          try {
+            final response = await http.get(Uri.parse(blobUrl));
+            if (response.statusCode == 200) {
+              final audioData = response.bodyBytes;
+              developer.log(
+                'Recording captured as bytes: ${audioData.length} bytes',
+              );
+              await sendAudio(audioData);
+            } else {
+              developer.log('HTTP request failed: ${response.statusCode}');
+            }
+          } catch (httpErr) {
+            developer.log('HTTP request error: $httpErr');
+          }
+        } else {
+          developer.log('No audio data captured: Blob URL is null or empty');
+        }
+      }
+    } catch (err) {
+      developer.log('Error stopping recording: $err');
+      _isRecording = false;
+      notifyListeners();
     }
   }
 
   @override
   void dispose() {
     _channel?.sink.close();
-    audioRecorder.dispose();
-    _audioPlayer.dispose();
+    _audioRecorder.dispose();
+    _sharedPlayer.dispose();
     super.dispose();
   }
 }

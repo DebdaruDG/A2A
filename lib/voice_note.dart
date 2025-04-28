@@ -1,16 +1,21 @@
-import 'dart:developer';
+import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import 'dart:typed_data';
+import 'package:flutter/services.dart';
 
+import 'chat_model.dart';
 import 'chat_provider.dart';
 
 class VoiceNoteWidget extends StatefulWidget {
-  final Uint8List audioBytes; // Decoded audio bytes
+  final ChatMessage message;
+  final ChatState chatState;
 
-  const VoiceNoteWidget({super.key, required this.audioBytes});
+  const VoiceNoteWidget({
+    Key? key,
+    required this.message,
+    required this.chatState,
+  }) : super(key: key);
 
   @override
   _VoiceNoteWidgetState createState() => _VoiceNoteWidgetState();
@@ -18,143 +23,175 @@ class VoiceNoteWidget extends StatefulWidget {
 
 class _VoiceNoteWidgetState extends State<VoiceNoteWidget> {
   late AudioPlayer _audioPlayer;
-  Duration _duration = Duration.zero;
-  Duration _position = Duration.zero;
+  bool _isPlaying = false;
+  Duration _totalDuration = Duration.zero;
+  Duration _currentPosition = Duration.zero;
+  bool _isSeeking = false;
 
   @override
   void initState() {
     super.initState();
-    _audioPlayer = AudioPlayer();
-
-    // Listen to audio duration changes
-    _audioPlayer.onDurationChanged.listen((Duration d) {
+    _audioPlayer = widget.chatState.sharedPlayer;
+    _audioPlayer.onDurationChanged.listen((duration) {
       setState(() {
-        _duration = d;
+        _totalDuration = duration;
       });
     });
-
-    // Listen to audio position changes
-    _audioPlayer.onPositionChanged.listen((Duration p) {
+    _audioPlayer.onPositionChanged.listen((position) {
       setState(() {
-        _position = p;
+        _currentPosition = position;
       });
     });
+  }
 
-    // Listen for when the audio completes
-    _audioPlayer.onPlayerStateChanged.listen((PlayerState state) {
-      if (state == PlayerState.completed) {
-        // setState(() {
-        //   _isPlaying = false;
-        //   _position = Duration.zero;
-        // });
-      }
+  void _togglePlayPause() async {
+    if (_isPlaying) {
+      await _audioPlayer.pause();
+    } else {
+      await _audioPlayer.setSource(BytesSource(widget.message.audioBytes!));
+      await _audioPlayer.resume();
+    }
+
+    setState(() {
+      _isPlaying = !_isPlaying;
     });
+    widget.chatState.togglePlayPause(widget.message.audioBytes!);
+  }
 
-    // Set the audio source using BytesSource
-    _audioPlayer.setSource(BytesSource(widget.audioBytes));
+  void _seekTo(double value) async {
+    final seekPosition = Duration(seconds: value.toInt());
+    await _audioPlayer.seek(seekPosition);
+    setState(() {
+      _currentPosition = seekPosition;
+    });
   }
 
   @override
   void dispose() {
-    _audioPlayer.dispose();
     super.dispose();
-  }
-
-  Future<void> _playPause() async {}
-
-  // A simple waveform painter to mimic the UI in the image
-  Widget _buildWaveform() {
-    return SizedBox(
-      height: 30,
-      width: 150,
-      child: CustomPaint(painter: WaveformPainter(_position, _duration)),
-    );
+    _audioPlayer.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<ChatState>(
-      builder: (context, state, child) {
-        return Container(
-          padding: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(15),
-            border: Border.all(
-              color: const Color.fromARGB(255, 244, 243, 243),
-              width: 2,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10.0),
+      child: Row(
+        children: [
+          if (!widget.message.isUser)
+            IconButton(
+              icon: Icon(
+                _isPlaying ? Icons.pause : Icons.play_arrow,
+                color: Colors.blue,
+              ),
+              onPressed: _togglePlayPause,
             ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              IconButton(
-                icon: Icon(
-                  state.isPlaying == false ? Icons.play_arrow : Icons.pause,
-                  color: Colors.blue,
-                  size: 30,
-                ),
-                onPressed: () {
-                  state.togglePlayPause;
-                },
+          if (!widget.message.isUser)
+            Expanded(
+              child: Column(
+                children: [
+                  Container(
+                    width: double.infinity,
+                    height: 50.0, // Fixed height for the waveform container
+                    child: CustomPaint(
+                      painter: AudioWaveformPainter(
+                        audioBytes: widget.message.audioBytes!,
+                        currentPosition: _currentPosition,
+                        totalDuration: _totalDuration,
+                      ),
+                    ),
+                  ),
+                  Slider(
+                    value: _currentPosition.inSeconds.toDouble(),
+                    min: 0,
+                    max: _totalDuration.inSeconds.toDouble(),
+                    onChanged: (value) {
+                      if (!_isSeeking) {
+                        _seekTo(value);
+                      }
+                    },
+                    onChangeStart: (_) {
+                      setState(() {
+                        _isSeeking = true;
+                      });
+                    },
+                    onChangeEnd: (_) {
+                      setState(() {
+                        _isSeeking = false;
+                      });
+                    },
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 5.0),
+                    child: Text(
+                      "${_currentPosition.inSeconds}s / ${_totalDuration.inSeconds}s",
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  ),
+                ],
               ),
-              SizedBox(width: 10),
-              _buildWaveform(),
-              SizedBox(width: 10),
-              Text(
-                "${_duration.inSeconds.toString().padLeft(2, '0')}:${(_duration.inMilliseconds % 1000).toString().padLeft(3, '0').substring(0, 2)}",
-                style: TextStyle(color: Colors.blue, fontSize: 14),
-              ),
-            ],
-          ),
-        );
-      },
+            ),
+        ],
+      ),
     );
   }
 }
 
-// Custom painter for the waveform visualization
-class WaveformPainter extends CustomPainter {
-  final Duration position;
-  final Duration duration;
+class AudioWaveformPainter extends CustomPainter {
+  final Uint8List audioBytes;
+  final Duration currentPosition;
+  final Duration totalDuration;
 
-  WaveformPainter(this.position, this.duration);
+  AudioWaveformPainter({
+    required this.audioBytes,
+    required this.currentPosition,
+    required this.totalDuration,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
     final paint =
         Paint()
-          ..color = Colors.grey
-          ..strokeWidth = 2
-          ..style = PaintingStyle.fill;
+          ..color = Colors.blue
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2;
 
-    final barWidth = 2.0;
-    final barSpacing = 1.0;
-    final totalBars = (size.width / (barWidth + barSpacing)).floor();
-    final progress =
-        duration.inMilliseconds > 0
-            ? position.inMilliseconds / duration.inMilliseconds
-            : 0.0;
+    final path = Path();
 
-    for (int i = 0; i < totalBars; i++) {
-      final barHeight =
-          (i < totalBars / 3 || i > 2 * totalBars / 3)
-              ? size.height * 0.3
-              : (i < totalBars / 2 || i > 1.5 * totalBars / 2)
-              ? size.height * 0.5
-              : size.height * 0.8;
+    // This part is for drawing the waveform. We simulate it by dividing the audio bytes.
+    int waveLength = audioBytes.length;
+    double step = size.width / waveLength;
+    double amplitude = size.height / 2;
 
-      final x = i * (barWidth + barSpacing);
-      final isActive = i / totalBars <= progress;
-
-      paint.color = isActive ? Colors.blue : Colors.grey;
-      canvas.drawRect(
-        Rect.fromLTWH(x, (size.height - barHeight) / 2, barWidth, barHeight),
-        paint,
-      );
+    for (int i = 0; i < waveLength; i++) {
+      double x = i * step;
+      double y = amplitude + (audioBytes[i] - 128) * (amplitude / 128);
+      if (i == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
     }
+
+    // Draw the waveform path
+    canvas.drawPath(path, paint);
+
+    // Optional: Draw current position indicator
+    double currentPositionX =
+        (currentPosition.inSeconds / totalDuration.inSeconds) * size.width;
+    final positionPaint =
+        Paint()
+          ..color = Colors.red
+          ..strokeWidth = 4;
+    canvas.drawLine(
+      Offset(currentPositionX, 0),
+      Offset(currentPositionX, size.height),
+      positionPaint,
+    );
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+  bool shouldRepaint(covariant CustomPainter oldDelegate) {
+    return true;
+  }
 }
