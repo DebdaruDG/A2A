@@ -108,7 +108,11 @@ class _LoadingWidget extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: const [
-        CircularProgressIndicator(color: Colors.white),
+        SizedBox(
+          height: 20,
+          width: 20,
+          child: CircularProgressIndicator(color: Colors.white),
+        ),
         SizedBox(width: 10),
         Text('Generating response...', style: TextStyle(color: Colors.white)),
       ],

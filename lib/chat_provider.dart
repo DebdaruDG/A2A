@@ -9,7 +9,6 @@ import 'package:http/http.dart' as http;
 import 'package:record/record.dart' as record;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'chat_model.dart'; // Assuming ChatMessage is defined here
-import 'package:intl/intl.dart';
 import 'dart:html' as html; // For saving audio on web
 
 class ChatState with ChangeNotifier {
@@ -61,7 +60,7 @@ class ChatState with ChangeNotifier {
 
     // Set up keep-alive ping (test disabling if Internal server error persists)
     _keepAliveTimer = Timer.periodic(Duration(seconds: 30), (timer) {
-      if (_channel != null && _channel!.sink != null) {
+      if (_channel != null) {
         _channel!.sink.add(jsonEncode({"action": "ping"}));
         developer.log('Sent keep-alive ping');
       }
@@ -105,13 +104,13 @@ class ChatState with ChangeNotifier {
         "use_assistant": false,
       };
 
-      if (_channel == null || _channel!.sink == null) {
+      if (_channel == null) {
         developer.log('WebSocket channel is null or closed for text event');
         connectWebSocket();
         await Future.delayed(Duration(milliseconds: 500));
       }
 
-      if (_channel != null && _channel!.sink != null) {
+      if (_channel != null) {
         _channel!.sink.add(jsonEncode(event));
         developer.log('Text event sent successfully');
       } else {
@@ -207,7 +206,7 @@ class ChatState with ChangeNotifier {
       );
 
       // Send over WebSocket
-      if (_channel == null || _channel!.sink == null) {
+      if (_channel == null) {
         developer.log('WebSocket channel is null or closed for chunk ${i + 1}');
         connectWebSocket();
         await Future.delayed(
@@ -215,7 +214,7 @@ class ChatState with ChangeNotifier {
         ); // Wait for connection
       }
 
-      if (_channel != null && _channel!.sink != null) {
+      if (_channel != null) {
         _channel!.sink.add(eventJson);
         developer.log(
           'WebSocket chunk ${i + 1}/$totalChunks sent successfully',
@@ -235,12 +234,12 @@ class ChatState with ChangeNotifier {
         "chunkIndex": 0,
         "totalChunks": 1,
       };
-      if (_channel == null || _channel!.sink == null) {
+      if (_channel == null) {
         developer.log('WebSocket channel is null or closed for test event');
         connectWebSocket();
         await Future.delayed(Duration(milliseconds: 500));
       }
-      if (_channel != null && _channel!.sink != null) {
+      if (_channel != null) {
         _channel!.sink.add(jsonEncode(testEvent));
         developer.log('Test event sent successfully');
       } else {
@@ -291,10 +290,6 @@ class ChatState with ChangeNotifier {
           if (kIsWeb) {
             final blob = html.Blob([bytes]);
             final url = html.Url.createObjectUrlFromBlob(blob);
-            final anchor =
-                html.AnchorElement(href: url)
-                  ..setAttribute('download', 'received_audio.wav')
-                  ..click();
             html.Url.revokeObjectUrl(url);
             developer.log('Saved received audio for debugging');
           }
