@@ -6,7 +6,6 @@ import 'voice_note.dart';
 class ChatScreen extends StatelessWidget {
   ChatScreen({super.key});
 
-  final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
   void _scrollToBottom() {
@@ -79,8 +78,6 @@ class ChatScreen extends StatelessWidget {
                   },
                 ),
               ),
-              const _InputSection(),
-              const SizedBox(height: 10),
               ElevatedButton(
                 onPressed:
                     state.isRecording
@@ -127,7 +124,7 @@ class _InputSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final chatState = context.read<ChatState>();
-    final TextEditingController _textController = TextEditingController();
+    final TextEditingController textController = TextEditingController();
 
     return Padding(
       padding: const EdgeInsets.all(8.0),
@@ -135,12 +132,12 @@ class _InputSection extends StatelessWidget {
         children: [
           Expanded(
             child: TextField(
-              controller: _textController,
+              controller: textController,
               textInputAction: TextInputAction.send,
               onSubmitted: (value) {
                 if (value.trim().isNotEmpty) {
                   chatState.sendText(value.trim());
-                  _textController.clear();
+                  textController.clear();
                 }
               },
               decoration: InputDecoration(
@@ -163,9 +160,9 @@ class _InputSection extends StatelessWidget {
                 suffixIcon: IconButton(
                   icon: const Icon(Icons.send),
                   onPressed: () {
-                    if (_textController.text.trim().isNotEmpty) {
-                      chatState.sendText(_textController.text.trim());
-                      _textController.clear();
+                    if (textController.text.trim().isNotEmpty) {
+                      chatState.sendText(textController.text.trim());
+                      textController.clear();
                     }
                   },
                 ),
