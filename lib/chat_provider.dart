@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:record/record.dart' as record;
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'chat_model.dart'; // Assuming ChatMessage is defined here
 import 'dart:html' as html;
 
@@ -592,6 +593,12 @@ class ChatState with ChangeNotifier {
     }
   }
 
+  Future<Uint8List> fetchAssetAudioUint8ListData(String assetPath) async {
+    final ByteData data = await rootBundle.load(assetPath);
+    final Uint8List audioData = data.buffer.asUint8List();
+    return audioData;
+  }
+
   Future<void> stopRecording() async {
     try {
       if (_isRecording) {
@@ -620,8 +627,14 @@ class ChatState with ChangeNotifier {
                 html.Url.revokeObjectUrl(url);
                 developer.log('Saved audio for debugging');
               }
+              // please replace the line below to use the variable 'audioData', instead of the mic audio while testing.
 
-              await sendAudio(audioData);
+              final punjabiPrompt = 'punjabi_voice.wav';
+              final compressedPunjabiPrompt = 'punjabi_voice_compressed.wav';
+              final assetAudioData = await fetchAssetAudioUint8ListData(
+                'assets/$punjabiPrompt',
+              );
+              await sendAudio(assetAudioData); // audioData
             } else {
               developer.log('HTTP request failed: ${response.statusCode}');
             }
