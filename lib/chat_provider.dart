@@ -74,7 +74,6 @@ class ChatState with ChangeNotifier {
 
     _channel?.stream.listen(
       (message) {
-        developer.log('Received WebSocket message: $message');
         _handleResponse(message);
       },
       onError: (error) {
@@ -261,7 +260,12 @@ class ChatState with ChangeNotifier {
       );
 
       // Prepare WebSocket event
-      final event = {"action": "PunjabiChatbot", "audio": chunk};
+      final event = {
+        "action": "PunjabiChatbot",
+        "chunkIndex": i,
+        "totalChunks": totalChunks,
+        "audio": chunk,
+      };
       final eventJson = jsonEncode(event);
 
       // Log event size
@@ -627,14 +631,14 @@ class ChatState with ChangeNotifier {
                 html.Url.revokeObjectUrl(url);
                 developer.log('Saved audio for debugging');
               }
-              // please replace the line below to use the variable 'audioData', instead of the mic audio while testing.
 
               final punjabiPrompt = 'punjabi_voice.wav';
               final compressedPunjabiPrompt = 'punjabi_voice_compressed.wav';
               final assetAudioData = await fetchAssetAudioUint8ListData(
                 'assets/$punjabiPrompt',
               );
-              await sendAudio(assetAudioData); // audioData
+              // please replace the line below to use the variable 'audioData', instead of the mic audio while testing.
+              await sendAudio(audioData); // audioData // assetAudioData
             } else {
               developer.log('HTTP request failed: ${response.statusCode}');
             }
