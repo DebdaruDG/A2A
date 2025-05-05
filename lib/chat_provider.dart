@@ -37,6 +37,10 @@ class ChatState with ChangeNotifier {
   bool get isLoading => _isLoading;
   bool get isPlaying => _isPlaying;
 
+  // For Recieving Chunks :-
+  Map<int, String> _chunkedAudioMap = {};
+  int _expectedTotalChunks = -1;
+
   ChatState() {
     if (_channel == null) {
       connectWebSocket();
@@ -349,23 +353,76 @@ class ChatState with ChangeNotifier {
       // Attempt to parse JSON
       final decoded = jsonDecode(fullMessage);
       developer.log('Parsed WebSocket response: $decoded');
-      developer.log(
-        'Parsed WebSocket response - runtimeType : ${decoded.runtimeType}',
-      );
 
+      // Handle PunjabiChatbot audio chunked stream
+      if (decoded['action'] == "PunjabiChatbot" && decoded['audio'] != null) {
+        int chunkIndex = decoded['chunkIndex'];
+        int totalChunks = decoded['totalChunks'];
+        String base64Chunk = decoded['audio'];
+
+        developer.log('Received chunk $chunkIndex of $totalChunks');
+
+        // Store chunk in correct order
+        _chunkedAudioMap[chunkIndex] = base64Chunk;
+        _expectedTotalChunks = totalChunks;
+
+        // Check if all chunks are received
+        if (_chunkedAudioMap.length == totalChunks) {
+          developer.log('All audio chunks received. Reconstructing...');
+
+          StringBuffer combined = StringBuffer();
+          for (int i = 0; i < totalChunks; i++) {
+            if (_chunkedAudioMap.containsKey(i)) {
+              combined.write(_chunkedAudioMap[i]);
+            } else {
+              developer.log('Missing chunk at index $i');
+              return;
+            }
+          }
+
+          try {
+            Uint8List audioBytes = base64Decode(combined.toString());
+            developer.log('Decoded full audio length: ${audioBytes.length}');
+
+            _chats.add(ChatMessage(audioBytes: audioBytes, isUser: false));
+
+            // Optional: Play audio in browser (Web only)
+            if (kIsWeb) {
+              final blob = html.Blob([audioBytes]);
+              final url = html.Url.createObjectUrlFromBlob(blob);
+              final audioElement =
+                  html.AudioElement()
+                    ..src = url
+                    ..autoplay = true;
+              html.document.body!.append(audioElement);
+              developer.log('Audio playback started');
+            }
+
+            // Clear the buffer
+            _chunkedAudioMap.clear();
+            _expectedTotalChunks = -1;
+            notifyListeners();
+          } catch (e) {
+            developer.log('Error decoding concatenated audio: $e');
+            _chats.add(
+              ChatMessage(text: 'Error decoding audio stream.', isUser: false),
+            );
+          }
+        }
+
+        _audioBuffer.clear();
+        return;
+      }
+
+      // Handle other responses (text/audio/static)
       PunjabiBotResponse? punjabiResponse = PunjabiBotResponse.fromJson(
         decoded,
       );
-
-      developer.log('reposnse body - ${punjabiResponse.audioChunks}');
-      // Process the response
       _chats.removeWhere((m) => m.isLoading);
 
       if ((punjabiResponse.audioChunks ?? []).isNotEmpty) {
-        // Punjabi Chat bot logic :-
         for (AudioChunks item in (punjabiResponse.audioChunks ?? [])) {
           final bytes = base64Decode(item.data ?? '');
-          developer.log('Decoded audio bytes: ${bytes.length}');
           _chats.add(
             ChatMessage(audioBytes: Uint8List.fromList(bytes), isUser: false),
           );
@@ -373,171 +430,43 @@ class ChatState with ChangeNotifier {
       }
 
       if (decoded['response'] != null) {
-        developer.log('Response text: ${decoded['response']}');
         _chats.add(ChatMessage(text: decoded['response'], isUser: false));
       }
+
       if (decoded['audio'] != null) {
-        developer.log(
-          'Single audio received, base64 length: ${decoded['audio'].length}',
-        );
         try {
           final bytes = base64Decode(decoded['audio']);
-          developer.log('Decoded audio bytes: ${bytes.length}');
           _chats.add(
             ChatMessage(audioBytes: Uint8List.fromList(bytes), isUser: false),
           );
         } catch (e) {
-          developer.log('Error decoding audio: $e');
+          developer.log('Error decoding single audio: $e');
           _chats.add(
             ChatMessage(text: 'Error: Failed to decode audio', isUser: false),
           );
         }
       }
+
       if (decoded['error'] != null) {
-        developer.log('Server error: ${decoded['error']}');
         _chats.add(
           ChatMessage(text: 'Error: ${decoded['error']}', isUser: false),
         );
       }
-      if (decoded['message'] != null &&
-          !decoded['message'].toString().toLowerCase().contains(
-            'internal server error',
-          )) {
-        developer.log('Internal server error: ${decoded['message']}');
-        _chats.add(ChatMessage(text: 'Internal server error', isUser: false));
-      }
 
-      // Clear buffer after processing
+      // if (decoded['message'] != null &&
+      //     !decoded['message'].toString().toLowerCase().contains(
+      //       'internal server error',
+      //     )) {
+      //   _chats.add(ChatMessage(text: 'Internal server error', isUser: false));
+      // }
+
       _audioBuffer.clear();
       _isLoading = false;
       notifyListeners();
     } catch (e) {
       if (e is FormatException) {
         developer.log('Partial message received, buffering: $e');
-        // Check if buffer contains complete JSON objects
-        final buffer = _audioBuffer.toString();
-        int lastValidJsonEnd = 0;
-        try {
-          while (lastValidJsonEnd < buffer.length) {
-            final nextJson = buffer.substring(lastValidJsonEnd);
-            final decoded = jsonDecode(nextJson);
-            developer.log('Parsed partial WebSocket response: $decoded');
-            _chats.removeWhere((m) => m.isLoading);
-            if (decoded['response'] != null) {
-              developer.log('Response text: ${decoded['response']}');
-              _chats.add(ChatMessage(text: decoded['response'], isUser: false));
-            }
-            if (decoded['audio'] != null) {
-              developer.log(
-                'Single audio received, base64 length: ${decoded['audio'].length}',
-              );
-              try {
-                final bytes = base64Decode(decoded['audio']);
-                developer.log('Decoded audio bytes: ${bytes.length}');
-                _chats.add(
-                  ChatMessage(
-                    audioBytes: Uint8List.fromList(bytes),
-                    isUser: false,
-                  ),
-                );
-
-                // Save received audio for debugging
-                if (kIsWeb) {
-                  final blob = html.Blob([bytes]);
-                  final url = html.Url.createObjectUrlFromBlob(blob);
-                  final anchor =
-                      html.AnchorElement(href: url)
-                        ..setAttribute('download', 'received_audio.wav')
-                        ..click();
-                  html.Url.revokeObjectUrl(url);
-                  developer.log('Saved received audio for debugging');
-                }
-              } catch (e) {
-                developer.log('Error decoding audio: $e');
-                _chats.add(
-                  ChatMessage(
-                    text: 'Error: Failed to decode audio',
-                    isUser: false,
-                  ),
-                );
-              }
-            }
-            if (decoded['audio_chunks'] != null &&
-                decoded['audio_chunks'] is List) {
-              developer.log(
-                'Audio chunks received, count: ${decoded['audio_chunks'].length}',
-              );
-              try {
-                final List<dynamic> chunks = decoded['audio_chunks'];
-                final StringBuffer base64Buffer = StringBuffer();
-                for (int i = 0; i < chunks.length; i++) {
-                  if (chunks[i] is String) {
-                    developer.log(
-                      'Processing chunk ${i + 1}/${chunks.length}, length: ${chunks[i].length}',
-                    );
-                    base64Buffer.write(chunks[i]);
-                  } else {
-                    developer.log('Invalid chunk ${i + 1}: not a string');
-                  }
-                }
-                final base64Audio = base64Buffer.toString();
-                developer.log(
-                  'Concatenated base64 audio length: ${base64Audio.length}',
-                );
-                final bytes = base64Decode(base64Audio);
-                developer.log('Decoded audio bytes: ${bytes.length}');
-                _chats.add(
-                  ChatMessage(
-                    audioBytes: Uint8List.fromList(bytes),
-                    isUser: false,
-                  ),
-                );
-
-                // Save received audio for debugging
-                if (kIsWeb) {
-                  final blob = html.Blob([bytes]);
-                  final url = html.Url.createObjectUrlFromBlob(blob);
-                  final anchor =
-                      html.AnchorElement(href: url)
-                        ..setAttribute('download', 'received_audio.wav')
-                        ..click();
-                  html.Url.revokeObjectUrl(url);
-                  developer.log('Saved received audio for debugging');
-                }
-              } catch (e) {
-                developer.log('Error processing audio chunks: $e');
-                _chats.add(
-                  ChatMessage(
-                    text: 'Error: Failed to process audio chunks',
-                    isUser: false,
-                  ),
-                );
-              }
-            }
-            if (decoded['error'] != null) {
-              developer.log('Server error: ${decoded['error']}');
-              _chats.add(
-                ChatMessage(text: 'Error: ${decoded['error']}', isUser: false),
-              );
-            }
-            if (decoded['message'] != null &&
-                decoded['message'].contains('Internal server error')) {
-              developer.log('Internal server error: ${decoded['message']}');
-              _chats.add(
-                ChatMessage(text: 'Internal server error', isUser: false),
-              );
-            }
-            lastValidJsonEnd += jsonEncode(decoded).length;
-            _isLoading = false;
-            notifyListeners();
-          }
-          // Clear processed portion of buffer
-          _audioBuffer.clear();
-          _audioBuffer.write(buffer.substring(lastValidJsonEnd));
-        } catch (innerError) {
-          developer.log('Error parsing partial buffer: $innerError');
-          // Keep buffering until complete JSON is received
-        }
+        // Keep buffering until complete JSON received
         return;
       }
       developer.log('Error processing WebSocket response: $e');
@@ -546,6 +475,222 @@ class ChatState with ChangeNotifier {
       notifyListeners();
     }
   }
+
+  // void _handleResponse(dynamic message) {
+  //   try {
+  //     developer.log('Received WebSocket message: $message');
+
+  //     // Handle acknowledgment messages
+  //     if (message is String && message.contains("Sent WebSocket response")) {
+  //       developer.log('Received acknowledgment: $message');
+  //       return;
+  //     }
+
+  //     // Buffer the message
+  //     _audioBuffer.write(message);
+  //     final fullMessage = _audioBuffer.toString();
+  //     developer.log('Current buffer: $fullMessage');
+
+  //     // Attempt to parse JSON
+  //     final decoded = jsonDecode(fullMessage);
+  //     developer.log('Parsed WebSocket response: $decoded');
+  //     developer.log(
+  //       'Parsed WebSocket response - runtimeType : ${decoded.runtimeType}',
+  //     );
+
+  //     PunjabiBotResponse? punjabiResponse = PunjabiBotResponse.fromJson(
+  //       decoded,
+  //     );
+
+  //     developer.log('reposnse body - ${punjabiResponse.audioChunks}');
+  //     // Process the response
+  //     _chats.removeWhere((m) => m.isLoading);
+
+  //     if ((punjabiResponse.audioChunks ?? []).isNotEmpty) {
+  //       // Punjabi Chat bot logic :-
+  //       for (AudioChunks item in (punjabiResponse.audioChunks ?? [])) {
+  //         final bytes = base64Decode(item.data ?? '');
+  //         developer.log('Decoded audio bytes: ${bytes.length}');
+  //         _chats.add(
+  //           ChatMessage(audioBytes: Uint8List.fromList(bytes), isUser: false),
+  //         );
+  //       }
+  //     }
+
+  //     if (decoded['response'] != null) {
+  //       developer.log('Response text: ${decoded['response']}');
+  //       _chats.add(ChatMessage(text: decoded['response'], isUser: false));
+  //     }
+  //     if (decoded['audio'] != null) {
+  //       developer.log(
+  //         'Single audio received, base64 length: ${decoded['audio'].length}',
+  //       );
+  //       try {
+  //         final bytes = base64Decode(decoded['audio']);
+  //         developer.log('Decoded audio bytes: ${bytes.length}');
+  //         _chats.add(
+  //           ChatMessage(audioBytes: Uint8List.fromList(bytes), isUser: false),
+  //         );
+  //       } catch (e) {
+  //         developer.log('Error decoding audio: $e');
+  //         _chats.add(
+  //           ChatMessage(text: 'Error: Failed to decode audio', isUser: false),
+  //         );
+  //       }
+  //     }
+  //     if (decoded['error'] != null) {
+  //       developer.log('Server error: ${decoded['error']}');
+  //       _chats.add(
+  //         ChatMessage(text: 'Error: ${decoded['error']}', isUser: false),
+  //       );
+  //     }
+  //     if (decoded['message'] != null &&
+  //         !decoded['message'].toString().toLowerCase().contains(
+  //           'internal server error',
+  //         )) {
+  //       developer.log('Internal server error: ${decoded['message']}');
+  //       _chats.add(ChatMessage(text: 'Internal server error', isUser: false));
+  //     }
+
+  //     // Clear buffer after processing
+  //     _audioBuffer.clear();
+  //     _isLoading = false;
+  //     notifyListeners();
+  //   } catch (e) {
+  //     if (e is FormatException) {
+  //       developer.log('Partial message received, buffering: $e');
+  //       // Check if buffer contains complete JSON objects
+  //       final buffer = _audioBuffer.toString();
+  //       int lastValidJsonEnd = 0;
+  //       try {
+  //         while (lastValidJsonEnd < buffer.length) {
+  //           final nextJson = buffer.substring(lastValidJsonEnd);
+  //           final decoded = jsonDecode(nextJson);
+  //           developer.log('Parsed partial WebSocket response: $decoded');
+  //           _chats.removeWhere((m) => m.isLoading);
+  //           if (decoded['response'] != null) {
+  //             developer.log('Response text: ${decoded['response']}');
+  //             _chats.add(ChatMessage(text: decoded['response'], isUser: false));
+  //           }
+  //           if (decoded['audio'] != null) {
+  //             developer.log(
+  //               'Single audio received, base64 length: ${decoded['audio'].length}',
+  //             );
+  //             try {
+  //               final bytes = base64Decode(decoded['audio']);
+  //               developer.log('Decoded audio bytes: ${bytes.length}');
+  //               _chats.add(
+  //                 ChatMessage(
+  //                   audioBytes: Uint8List.fromList(bytes),
+  //                   isUser: false,
+  //                 ),
+  //               );
+
+  //               // Save received audio for debugging
+  //               if (kIsWeb) {
+  //                 final blob = html.Blob([bytes]);
+  //                 final url = html.Url.createObjectUrlFromBlob(blob);
+  //                 final anchor =
+  //                     html.AnchorElement(href: url)
+  //                       ..setAttribute('download', 'received_audio.wav')
+  //                       ..click();
+  //                 html.Url.revokeObjectUrl(url);
+  //                 developer.log('Saved received audio for debugging');
+  //               }
+  //             } catch (e) {
+  //               developer.log('Error decoding audio: $e');
+  //               _chats.add(
+  //                 ChatMessage(
+  //                   text: 'Error: Failed to decode audio',
+  //                   isUser: false,
+  //                 ),
+  //               );
+  //             }
+  //           }
+  //           if (decoded['audio_chunks'] != null &&
+  //               decoded['audio_chunks'] is List) {
+  //             developer.log(
+  //               'Audio chunks received, count: ${decoded['audio_chunks'].length}',
+  //             );
+  //             try {
+  //               final List<dynamic> chunks = decoded['audio_chunks'];
+  //               final StringBuffer base64Buffer = StringBuffer();
+  //               for (int i = 0; i < chunks.length; i++) {
+  //                 if (chunks[i] is String) {
+  //                   developer.log(
+  //                     'Processing chunk ${i + 1}/${chunks.length}, length: ${chunks[i].length}',
+  //                   );
+  //                   base64Buffer.write(chunks[i]);
+  //                 } else {
+  //                   developer.log('Invalid chunk ${i + 1}: not a string');
+  //                 }
+  //               }
+  //               final base64Audio = base64Buffer.toString();
+  //               developer.log(
+  //                 'Concatenated base64 audio length: ${base64Audio.length}',
+  //               );
+  //               final bytes = base64Decode(base64Audio);
+  //               developer.log('Decoded audio bytes: ${bytes.length}');
+  //               _chats.add(
+  //                 ChatMessage(
+  //                   audioBytes: Uint8List.fromList(bytes),
+  //                   isUser: false,
+  //                 ),
+  //               );
+
+  //               // Save received audio for debugging
+  //               if (kIsWeb) {
+  //                 final blob = html.Blob([bytes]);
+  //                 final url = html.Url.createObjectUrlFromBlob(blob);
+  //                 final anchor =
+  //                     html.AnchorElement(href: url)
+  //                       ..setAttribute('download', 'received_audio.wav')
+  //                       ..click();
+  //                 html.Url.revokeObjectUrl(url);
+  //                 developer.log('Saved received audio for debugging');
+  //               }
+  //             } catch (e) {
+  //               developer.log('Error processing audio chunks: $e');
+  //               _chats.add(
+  //                 ChatMessage(
+  //                   text: 'Error: Failed to process audio chunks',
+  //                   isUser: false,
+  //                 ),
+  //               );
+  //             }
+  //           }
+  //           if (decoded['error'] != null) {
+  //             developer.log('Server error: ${decoded['error']}');
+  //             _chats.add(
+  //               ChatMessage(text: 'Error: ${decoded['error']}', isUser: false),
+  //             );
+  //           }
+  //           if (decoded['message'] != null &&
+  //               decoded['message'].contains('Internal server error')) {
+  //             developer.log('Internal server error: ${decoded['message']}');
+  //             _chats.add(
+  //               ChatMessage(text: 'Internal server error', isUser: false),
+  //             );
+  //           }
+  //           lastValidJsonEnd += jsonEncode(decoded).length;
+  //           _isLoading = false;
+  //           notifyListeners();
+  //         }
+  //         // Clear processed portion of buffer
+  //         _audioBuffer.clear();
+  //         _audioBuffer.write(buffer.substring(lastValidJsonEnd));
+  //       } catch (innerError) {
+  //         developer.log('Error parsing partial buffer: $innerError');
+  //         // Keep buffering until complete JSON is received
+  //       }
+  //       return;
+  //     }
+  //     developer.log('Error processing WebSocket response: $e');
+  //     _audioBuffer.clear();
+  //     _isLoading = false;
+  //     notifyListeners();
+  //   }
+  // }
 
   Future<void> togglePlayPause(Uint8List audioBytes) async {
     if (_currentPlayingAudio != null && _currentPlayingAudio != audioBytes) {
