@@ -11,7 +11,6 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'chat_model.dart';
 import 'dart:html' as html;
-import 'models/audio_completion.dart';
 import 'models/punjabi_audio.dart';
 
 class ChatState with ChangeNotifier {
@@ -25,12 +24,12 @@ class ChatState with ChangeNotifier {
   final StringBuffer _audioBuffer = StringBuffer();
   Timer? _keepAliveTimer;
 
-  List<ChatMessage> _chats = [];
+  final List<ChatMessage> _chats = [];
   List<ChatMessage> get chats => _chats;
 
   Uint8List? _currentPlayingAudio;
   Duration? _currentPosition;
-  Map<Uint8List, Duration> _pausedPositions = {};
+  final Map<Uint8List, Duration> _pausedPositions = {};
 
   AudioPlayer get sharedPlayer => _sharedPlayer;
   bool get isRecording => _isRecording;
@@ -38,8 +37,7 @@ class ChatState with ChangeNotifier {
   bool get isReceivingAudioChunks => _isReceivingAudioChunks;
   bool get isPlaying => _isPlaying;
 
-  Map<int, String> _chunkedAudioMap = {};
-  int _expectedTotalChunks = -1;
+  final Map<int, String> _chunkedAudioMap = {};
 
   ChatState() {
     if (_channel == null) {
@@ -264,7 +262,6 @@ class ChatState with ChangeNotifier {
         developer.log('Received chunk $chunkIndex of $totalChunks');
 
         _chunkedAudioMap[chunkIndex] = base64Chunk;
-        _expectedTotalChunks = totalChunks;
 
         if (!_isReceivingAudioChunks) {
           _isReceivingAudioChunks = true;
@@ -303,7 +300,6 @@ class ChatState with ChangeNotifier {
             }
 
             _chunkedAudioMap.clear();
-            _expectedTotalChunks = -1;
             _isReceivingAudioChunks = false;
             _isLoading = false; // Reset loading state
             notifyListeners();

@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'chat_provider.dart';
 import 'voice_note.dart';
-import 'widgets/app_loader.dart';
 
 class ChatScreen extends StatelessWidget {
   ChatScreen({super.key});
@@ -64,8 +63,9 @@ class ChatScreen extends StatelessWidget {
                         ),
                         child:
                             // item.isLoading
-                            state.isReceivingAudioChunks
-                                ? const DancingDots() // Always show DancingDots for loading
+                            state.isLoading
+                                ? _LoadingWidget()
+                                // const DancingDots() // Always show DancingDots for loading
                                 : item.audioBytes != null
                                 ? VoiceNoteWidget(
                                   message: item,
