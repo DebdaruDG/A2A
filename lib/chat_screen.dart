@@ -1,7 +1,10 @@
+import 'dart:developer';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'chat_provider.dart';
 import 'voice_note.dart';
+import 'widgets/app_loader.dart';
 
 class ChatScreen extends StatelessWidget {
   ChatScreen({super.key});
@@ -41,6 +44,9 @@ class ChatScreen extends StatelessWidget {
                   itemCount: state.chats.length,
                   itemBuilder: (context, index) {
                     final item = state.chats[index];
+                    log(
+                      'state.isReceivingAudioChunks :- ${state.isReceivingAudioChunks}',
+                    );
                     return Align(
                       alignment:
                           item.isUser
@@ -57,8 +63,9 @@ class ChatScreen extends StatelessWidget {
                           borderRadius: BorderRadius.circular(15),
                         ),
                         child:
-                            item.isLoading
-                                ? const _LoadingWidget()
+                            // item.isLoading
+                            state.isReceivingAudioChunks
+                                ? const DancingDots() // Always show DancingDots for loading
                                 : item.audioBytes != null
                                 ? VoiceNoteWidget(
                                   message: item,
@@ -78,16 +85,18 @@ class ChatScreen extends StatelessWidget {
                   },
                 ),
               ),
-              ElevatedButton(
-                onPressed:
-                    state.isRecording
-                        ? state.stopRecording
-                        : state.startRecording,
-                child: Text(
-                  state.isRecording ? 'Stop Recording' : 'Tap to Speak',
+              if (!state.isLoading) // Show button only when not loading
+                ElevatedButton(
+                  onPressed:
+                      state.isRecording
+                          ? state.stopRecording
+                          : state.startRecording,
+                  child: Text(
+                    state.isRecording ? 'Stop Recording' : 'Tap to Speak',
+                  ),
                 ),
-              ),
               const SizedBox(height: 10),
+              const _InputSection(),
             ],
           ),
         );
@@ -96,7 +105,6 @@ class ChatScreen extends StatelessWidget {
   }
 }
 
-// Loading widget when waiting for bot response
 class _LoadingWidget extends StatelessWidget {
   const _LoadingWidget();
 
@@ -117,7 +125,6 @@ class _LoadingWidget extends StatelessWidget {
   }
 }
 
-// Text input section widget
 class _InputSection extends StatelessWidget {
   const _InputSection();
 

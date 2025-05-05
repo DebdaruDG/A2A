@@ -9,15 +9,15 @@ import 'package:http/http.dart' as http;
 import 'package:record/record.dart' as record;
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:flutter/services.dart' show rootBundle;
-import 'chat_model.dart'; // Assuming ChatMessage is defined here
+import 'chat_model.dart';
 import 'dart:html' as html;
-
 import 'models/audio_completion.dart';
-import 'models/punjabi_audio.dart'; // For saving audio on web
+import 'models/punjabi_audio.dart';
 
 class ChatState with ChangeNotifier {
   bool _isRecording = false;
   bool _isLoading = false;
+  bool _isReceivingAudioChunks = false;
   bool _isPlaying = false;
   final record.AudioRecorder _audioRecorder = record.AudioRecorder();
   WebSocketChannel? _channel;
@@ -35,9 +35,9 @@ class ChatState with ChangeNotifier {
   AudioPlayer get sharedPlayer => _sharedPlayer;
   bool get isRecording => _isRecording;
   bool get isLoading => _isLoading;
+  bool get isReceivingAudioChunks => _isReceivingAudioChunks;
   bool get isPlaying => _isPlaying;
 
-  // For Recieving Chunks :-
   Map<int, String> _chunkedAudioMap = {};
   int _expectedTotalChunks = -1;
 
@@ -68,7 +68,6 @@ class ChatState with ChangeNotifier {
     );
     developer.log('WebSocket connected');
 
-    // Set up keep-alive ping (test disabling if Internal server error persists)
     _keepAliveTimer = Timer.periodic(Duration(minutes: 15), (timer) {
       if (_channel != null) {
         _channel!.sink.add(jsonEncode({"action": "ping"}));
@@ -83,6 +82,7 @@ class ChatState with ChangeNotifier {
       onError: (error) {
         developer.log('WebSocket Error: $error');
         _isLoading = false;
+        _isReceivingAudioChunks = false;
         notifyListeners();
       },
       onDone: () {
@@ -134,30 +134,26 @@ class ChatState with ChangeNotifier {
 
   Future<void> sendAudio(Uint8List audioData) async {
     try {
-      _isLoading = true;
+      _isLoading = true; // Trigger loading state immediately
       notifyListeners();
 
-      // Log size of audioData in bytes (to 3 decimal places)
       final audioDataSizeBytes = audioData.length.toDouble();
       developer.log(
         'audioBytesInput size: ${audioDataSizeBytes.toStringAsFixed(3)} bytes',
       );
 
-      // Add audio data to chats
       _chats.add(ChatMessage(isUser: true, audioBytes: audioData));
+      _chats.add(ChatMessage(isUser: false, isLoading: true)); // Add loader
       notifyListeners();
 
-      // Encode to base64
       String base64Audio = base64Encode(audioData);
 
-      // Log total size of base64Audio in kilobytes (to 3 decimal places)
-      final base64SizeBytes = base64Audio.length; // Bytes in UTF-8
-      final base64SizeKB = base64SizeBytes / 1024.0; // Convert to KB
+      final base64SizeBytes = base64Audio.length;
+      final base64SizeKB = base64SizeBytes / 1024.0;
       developer.log(
         'base64Audio total size: ${base64SizeKB.toStringAsFixed(3)} KB',
       );
 
-      // Send chunks over WebSocket
       await sendAudioChunks(base64Audio);
 
       developer.log(
@@ -165,111 +161,36 @@ class ChatState with ChangeNotifier {
       );
     } catch (err) {
       developer.log('audioBytesInput error: $err');
+      _chats.removeWhere((m) => m.isLoading);
+      _chats.add(ChatMessage(text: 'Error sending audio.', isUser: false));
     } finally {
-      _isLoading = false;
+      // Do not reset _isLoading here; wait for response or error in _handleResponse
       notifyListeners();
     }
   }
 
-  // Future<void> sendAudioChunksForAudioVoiceCompletionWS(String base64Audio) async {
-  //   // Define chunk size to match backend (80,000 characters)
-  //   const int chunkSize = 30000;
-
-  //   // Calculate number of chunks
-  //   final int base64Length = base64Audio.length;
-  //   final int totalChunks = (base64Length / chunkSize).ceil();
-  //   developer.log(
-  //     'Splitting into $totalChunks chunk(s) of up to 80,000 characters each',
-  //   );
-
-  //   // Send chunks over WebSocket
-  //   for (int i = 0; i < totalChunks; i++) {
-  //     // Calculate start and end indices for the chunk
-  //     final int start = i * chunkSize;
-  //     final int end =
-  //         (start + chunkSize < base64Length) ? start + chunkSize : base64Length;
-
-  //     // Extract chunk
-  //     final String chunk = base64Audio.substring(start, end);
-  //     final chunkSizeBytes = chunk.length;
-  //     final chunkSizeKB = chunkSizeBytes / 1024.0;
-
-  //     // Log chunk details
-  //     developer.log(
-  //       'Chunk ${i + 1}/$totalChunks size: ${chunkSizeKB.toStringAsFixed(3)} KB ($chunkSizeBytes bytes)',
-  //     );
-
-  //     // Prepare WebSocket event
-  //     final event = {
-  //       "action": "AudioCompletionOpenaiVoice",
-  //       "audio": chunk,
-  //       // "chunkIndex": i,
-  //       // "totalChunks": totalChunks,
-  //     };
-  //     final eventJson = jsonEncode(event);
-
-  //     // Log event size
-  //     final eventSizeBytes = eventJson.length;
-  //     developer.log(
-  //       'WebSocket event size (chunk ${i + 1}): ${(eventSizeBytes / 1024.0).toStringAsFixed(3)} KB ($eventSizeBytes bytes)',
-  //     );
-
-  //     // Send over WebSocket
-  //     if (_channel == null) {
-  //       developer.log('WebSocket channel is null or closed for chunk ${i + 1}');
-  //       connectWebSocket();
-  //       await Future.delayed(
-  //         Duration(milliseconds: 500),
-  //       ); // Wait for connection
-  //     }
-
-  //     if (_channel != null) {
-  //       _channel!.sink.add(eventJson);
-  //       developer.log(
-  //         'WebSocket chunk ${i + 1}/$totalChunks sent successfully',
-  //       );
-  //     } else {
-  //       throw Exception('Failed to reconnect WebSocket for chunk ${i + 1}');
-  //     }
-  //   }
-  // }
-
   Future<void> sendAudioChunks(String base64Audio) async {
-    // Define chunk size (20 KB in bytes to stay under 20 KB limit)
-    const int chunkSizeBytes = 20 * 1024; // 20 KB
+    const int chunkSizeBytes = 20 * 1024;
 
-    // Calculate number of chunks
     final int base64SizeBytes = base64Audio.length;
     final int totalChunks = (base64SizeBytes / chunkSizeBytes).ceil();
     developer.log('Splitting into $totalChunks chunk(s) of ~20 KB each');
-    // final List<String> audioChunks
 
-    // Send chunks over WebSocket
-    for (
-      int i = 0;
-      i <
-          // 2;
-          totalChunks;
-      i++
-    ) {
-      // Calculate start and end indices for the chunk
+    for (int i = 0; i < totalChunks; i++) {
       final int start = i * chunkSizeBytes;
       final int end =
           start + chunkSizeBytes < base64SizeBytes
               ? start + chunkSizeBytes
               : base64SizeBytes;
 
-      // Extract chunk
       final String chunk = base64Audio.substring(start, end);
       final chunkSizeBytesActual = chunk.length;
       final chunkSizeKB = chunkSizeBytesActual / 1024.0;
 
-      // Log chunk details
       developer.log(
         'Chunk ${i + 1}/$totalChunks size: ${chunkSizeKB.toStringAsFixed(3)} KB ($chunkSizeBytesActual bytes)',
       );
 
-      // Prepare WebSocket event
       final event = {
         "action": "PunjabiChatbot",
         "chunkIndex": i,
@@ -278,26 +199,12 @@ class ChatState with ChangeNotifier {
       };
       final eventJson = jsonEncode(event);
 
-      // Log event size
-      final eventSizeBytes = eventJson.length;
       developer.log(
-        'WebSocket event size (chunk ${i + 1}): ${(eventSizeBytes / 1024.0).toStringAsFixed(3)} KB ($eventSizeBytes bytes)',
+        'WebSocket event size (chunk ${i + 1}): ${(eventJson.length / 1024.0).toStringAsFixed(3)} KB (${eventJson.length} bytes)',
       );
 
-      // Send over WebSocket
-      // if (_channel == null) {
-      //   developer.log('WebSocket channel is null or closed for chunk ${i + 1}');
-      //   connectWebSocket();
-      //   await Future.delayed(
-      //     Duration(milliseconds: 500),
-      //   ); // Wait for connection
-      // }
-
       if (_channel != null) {
-        _channel!.sink.add(
-          eventJson,
-          // event,
-        );
+        _channel!.sink.add(eventJson);
         developer.log(
           'WebSocket chunk ${i + 1}/$totalChunks sent successfully',
         );
@@ -305,12 +212,10 @@ class ChatState with ChangeNotifier {
         throw Exception('Failed to reconnect WebSocket for chunk ${i + 1}');
       }
 
-      // Throttle to avoid WebSocket flooding
       await Future.delayed(Duration(milliseconds: 50));
     }
   }
 
-  // Test function to send a simple message and check for response
   Future<void> testWebSocket() async {
     try {
       final testEvent = {
@@ -339,22 +244,18 @@ class ChatState with ChangeNotifier {
     try {
       developer.log('Received WebSocket message: $message');
 
-      // Handle acknowledgment messages
       if (message is String && message.contains("Sent WebSocket response")) {
         developer.log('Received acknowledgment: $message');
         return;
       }
 
-      // Buffer the message
       _audioBuffer.write(message);
       final fullMessage = _audioBuffer.toString();
       developer.log('Current buffer: $fullMessage');
 
-      // Attempt to parse JSON
       final decoded = jsonDecode(fullMessage);
       developer.log('Parsed WebSocket response: $decoded');
 
-      // Handle PunjabiChatbot audio chunked stream
       if (decoded['action'] == "PunjabiChatbot" && decoded['audio'] != null) {
         int chunkIndex = decoded['chunkIndex'];
         int totalChunks = decoded['totalChunks'];
@@ -362,11 +263,14 @@ class ChatState with ChangeNotifier {
 
         developer.log('Received chunk $chunkIndex of $totalChunks');
 
-        // Store chunk in correct order
         _chunkedAudioMap[chunkIndex] = base64Chunk;
         _expectedTotalChunks = totalChunks;
 
-        // Check if all chunks are received
+        if (!_isReceivingAudioChunks) {
+          _isReceivingAudioChunks = true;
+          notifyListeners();
+        }
+
         if (_chunkedAudioMap.length == totalChunks) {
           developer.log('All audio chunks received. Reconstructing...');
 
@@ -384,9 +288,9 @@ class ChatState with ChangeNotifier {
             Uint8List audioBytes = base64Decode(combined.toString());
             developer.log('Decoded full audio length: ${audioBytes.length}');
 
+            _chats.removeWhere((m) => m.isLoading);
             _chats.add(ChatMessage(audioBytes: audioBytes, isUser: false));
 
-            // Optional: Play audio in browser (Web only)
             if (kIsWeb) {
               final blob = html.Blob([audioBytes]);
               final url = html.Url.createObjectUrlFromBlob(blob);
@@ -398,15 +302,20 @@ class ChatState with ChangeNotifier {
               developer.log('Audio playback started');
             }
 
-            // Clear the buffer
             _chunkedAudioMap.clear();
             _expectedTotalChunks = -1;
+            _isReceivingAudioChunks = false;
+            _isLoading = false; // Reset loading state
             notifyListeners();
           } catch (e) {
             developer.log('Error decoding concatenated audio: $e');
+            _chats.removeWhere((m) => m.isLoading);
             _chats.add(
               ChatMessage(text: 'Error decoding audio stream.', isUser: false),
             );
+            _isReceivingAudioChunks = false;
+            _isLoading = false;
+            notifyListeners();
           }
         }
 
@@ -414,7 +323,6 @@ class ChatState with ChangeNotifier {
         return;
       }
 
-      // Handle other responses (text/audio/static)
       PunjabiBotResponse? punjabiResponse = PunjabiBotResponse.fromJson(
         decoded,
       );
@@ -455,16 +363,17 @@ class ChatState with ChangeNotifier {
 
       _audioBuffer.clear();
       _isLoading = false;
+      _isReceivingAudioChunks = false;
       notifyListeners();
     } catch (e) {
       if (e is FormatException) {
         developer.log('Partial message received, buffering: $e');
-        // Keep buffering until complete JSON received
         return;
       }
       developer.log('Error processing WebSocket response: $e');
       _audioBuffer.clear();
       _isLoading = false;
+      _isReceivingAudioChunks = false;
       notifyListeners();
     }
   }
@@ -509,10 +418,10 @@ class ChatState with ChangeNotifier {
           await _audioRecorder.start(
             const record.RecordConfig(
               encoder: record.AudioEncoder.wav,
-              sampleRate: 16000, // 16 kHz for speech recognition
+              sampleRate: 16000,
               numChannels: 1,
             ),
-            path: '', // Empty path for in-memory recording
+            path: '',
           );
           developer.log('Recording started (WAV, memory mode) for Web');
         } else {
@@ -551,14 +460,9 @@ class ChatState with ChangeNotifier {
                 'Recording captured as bytes: ${audioData.length} bytes',
               );
 
-              // Save audio for debugging
               if (kIsWeb) {
                 final blob = html.Blob([audioData]);
                 final url = html.Url.createObjectUrlFromBlob(blob);
-                // final anchor =
-                //     html.AnchorElement(href: url)
-                //       ..setAttribute('download', 'recorded_audio.wav')
-                //       ..click();
                 html.Url.revokeObjectUrl(url);
                 developer.log('Saved audio for debugging');
               }
@@ -568,8 +472,7 @@ class ChatState with ChangeNotifier {
               final assetAudioData = await fetchAssetAudioUint8ListData(
                 'assets/$punjabiPrompt',
               );
-              // please replace the line below to use the variable 'audioData', instead of the mic audio while testing.
-              await sendAudio(audioData); // audioData // assetAudioData
+              await sendAudio(audioData);
             } else {
               developer.log('HTTP request failed: ${response.statusCode}');
             }
