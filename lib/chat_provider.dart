@@ -65,7 +65,7 @@ class ChatState with ChangeNotifier {
     developer.log('WebSocket connected');
 
     // Set up keep-alive ping (test disabling if Internal server error persists)
-    _keepAliveTimer = Timer.periodic(Duration(seconds: 30), (timer) {
+    _keepAliveTimer = Timer.periodic(Duration(minutes: 15), (timer) {
       if (_channel != null) {
         _channel!.sink.add(jsonEncode({"action": "ping"}));
         developer.log('Sent keep-alive ping');
@@ -241,7 +241,13 @@ class ChatState with ChangeNotifier {
     // final List<String> audioChunks
 
     // Send chunks over WebSocket
-    for (int i = 0; i < totalChunks; i++) {
+    for (
+      int i = 0;
+      i <
+          // 2;
+          totalChunks;
+      i++
+    ) {
       // Calculate start and end indices for the chunk
       final int start = i * chunkSizeBytes;
       final int end =
@@ -256,7 +262,7 @@ class ChatState with ChangeNotifier {
 
       // Log chunk details
       developer.log(
-        'Chunk ${i + 1}/$totalChunks size: ${chunkSizeKB.toStringAsFixed(3)} KB (${chunkSizeBytesActual} bytes)',
+        'Chunk ${i + 1}/$totalChunks size: ${chunkSizeKB.toStringAsFixed(3)} KB ($chunkSizeBytesActual bytes)',
       );
 
       // Prepare WebSocket event
@@ -275,13 +281,13 @@ class ChatState with ChangeNotifier {
       );
 
       // Send over WebSocket
-      if (_channel == null) {
-        developer.log('WebSocket channel is null or closed for chunk ${i + 1}');
-        connectWebSocket();
-        await Future.delayed(
-          Duration(milliseconds: 500),
-        ); // Wait for connection
-      }
+      // if (_channel == null) {
+      //   developer.log('WebSocket channel is null or closed for chunk ${i + 1}');
+      //   connectWebSocket();
+      //   await Future.delayed(
+      //     Duration(milliseconds: 500),
+      //   ); // Wait for connection
+      // }
 
       if (_channel != null) {
         _channel!.sink.add(
@@ -294,6 +300,9 @@ class ChatState with ChangeNotifier {
       } else {
         throw Exception('Failed to reconnect WebSocket for chunk ${i + 1}');
       }
+
+      // Throttle to avoid WebSocket flooding
+      await Future.delayed(Duration(milliseconds: 50));
     }
   }
 
