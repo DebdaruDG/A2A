@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:ui';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
 import 'dart:math';
 
 import 'chat_model.dart';
