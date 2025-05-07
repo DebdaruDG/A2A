@@ -23,6 +23,8 @@ class ChatState with ChangeNotifier {
   final AudioPlayer _sharedPlayer = AudioPlayer();
   final StringBuffer _audioBuffer = StringBuffer();
   Timer? _keepAliveTimer;
+  Stopwatch _totalTimer = Stopwatch();
+  Stopwatch _iterationTimer = Stopwatch();
 
   final List<ChatMessage> _chats = [];
   List<ChatMessage> get chats => _chats;
@@ -59,6 +61,9 @@ class ChatState with ChangeNotifier {
   void connectWebSocket() {
     _channel?.sink.close();
     _keepAliveTimer?.cancel();
+    _totalTimer.reset();
+    _totalTimer.start();
+    developer.log('Total timer started');
     _channel = WebSocketChannel.connect(
       Uri.parse(
         'wss://pu6niet7nl.execute-api.ap-south-1.amazonaws.com/production/',
@@ -75,15 +80,21 @@ class ChatState with ChangeNotifier {
 
     _channel?.stream.listen(
       (message) {
+        _iterationTimer.reset();
+        _iterationTimer.start();
         _handleResponse(message);
+        _iterationTimer.stop();
       },
       onError: (error) {
+        _iterationTimer.stop();
         developer.log('WebSocket Error: $error');
         _isLoading = false;
         _isReceivingAudioChunks = false;
         notifyListeners();
       },
       onDone: () {
+        _iterationTimer.stop();
+        _totalTimer.stop();
         developer.log(
           'WebSocket closed with code: ${_channel?.closeCode}, reason: ${_channel?.closeReason}',
         );

@@ -96,7 +96,7 @@ class ChatScreen extends StatelessWidget {
                   ),
                 ),
               const SizedBox(height: 10),
-              const _InputSection(),
+              // const _InputSection(),
             ],
           ),
         );
